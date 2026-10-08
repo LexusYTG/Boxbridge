@@ -1,66 +1,74 @@
 # Boxbridge
 
-Interceptor transparente de binarios x86/x86_64 hacia `box64` via `LD_PRELOAD`.
+**Run x86 programs on an ARM device without thinking about it.**
 
-## Que hace
+Boxbridge quietly redirects any x86 or x86_64 program your system tries to launch through [`box64`](https://github.com/ptitSeb/box64), so everything just works. No root, no kernel changes.
 
-Cuando un proceso carga esta libreria, cualquier llamada a `execve`,
-`execv`, `execvp`, `execvpe`, `posix_spawn`, `posix_spawnp` o `fexecve`
-que apunte a un ELF x86 o x86_64 se reescribe automaticamente a:
+---
 
-    box64 <binario> <args...>
+## What it does
 
-No requiere root, no requiere `binfmt_misc`, no toca el kernel. Es el
-mismo patron que usa Termux-exec para reescribir `execve` dentro del
-sandbox de Android.
+When a program starts another program, Boxbridge checks whether the new one is an x86 binary. If it is, Boxbridge swaps in `box64` to run it:
 
-## Que cubre
+```
+launch: ./some-x86-app --flag
+runs:   box64 ./some-x86-app --flag
+```
 
-- `execve` — intercepta y redirige si el path resuelve a x86.
-- `execv`, `execvp`, `execvpe` — resuelven PATH y delegan en el wrapper.
-- `posix_spawn`, `posix_spawnp` — reescriben el path antes de spawnear.
-- `fexecve` — resuelve el path via `/proc/self/fd/N` y reescribe.
+Native ARM programs are left completely alone.
 
-## Que NO cubre
+## Why it exists
 
-- Syscalls directas (`syscall(SYS_execve, ...)`). No es comun en apps
-  userland, pero algunos runtimes lo hacen. Si hace falta, se agrega
-  interceptando `syscall` por simbolo y filtrando el numero.
-- `/proc/self/exe` reescrito por la app misma.
-- Binarios que cargan un ELF x86 a mano via `dlopen` en lugar de
-  `execve`. Eso no es exec, es dlopen, y no aplica en este flujo.
+Some software, Steam being the classic example, ships x86 binaries and launches many helper programs of its own. Running the main program under `box64` isn't enough, because every helper it starts would also need `box64`. Boxbridge handles that automatically, at the moment each program is launched.
 
-## Uso
+The usual alternative, `binfmt_misc`, needs root and kernel support. Android and containers rarely offer either. Boxbridge works entirely in userspace, using the same trick Termux-exec uses to get around Android's sandbox.
 
-Compilar:
+## How it works
 
-    make
+Boxbridge is a small library loaded with `LD_PRELOAD`. It sits in front of the system's "launch a program" functions, looks at the target file, and rewrites the command when needed.
 
-Precargar al proceso que lanza subprocesos:
+**Covered:** `execve`, `execv`, `execvp`, `execvpe`, `posix_spawn`, `posix_spawnp`, `fexecve`
 
-    export LD_PRELOAD=/ruta/libboxbridge.so
-    steam
+**Not covered:**
+- Programs that bypass the standard library and call the kernel directly (rare, but some runtimes do it).
+- Apps that rewrite `/proc/self/exe` themselves.
+- Programs that load an x86 library by hand instead of launching a process. That is a different mechanism and out of scope here.
 
-Todo `exec*` que haga Steam (o lo que sea) va a pasar por el filtro.
+## Usage
 
-## Variables
+Build it:
 
-- `BOXBRIDGE_OFF=1`      desactiva la interceptacion sin descargar la lib.
-- `BOXBRIDGE_BOX64=PATH` ruta del binario box64. Default `/usr/bin/box64`.
-- `BOXBRIDGE_VERBOSE=1`  log a stderr de cada reescritura x86 detectada.
-- `BOXBRIDGE_TRACE=1`    log tambien de cada exec no interceptado.
+```sh
+make
+```
 
-## Ejemplo tipico (Steam)
+Load it into the program that starts other programs:
 
-    apt install box64
-    cp libboxbridge.so /usr/local/lib/
-    LD_PRELOAD=/usr/local/lib/libboxbridge.so BOXBRIDGE_VERBOSE=1 \
-        /root/steam-extract/usr/bin/steam
+```sh
+export LD_PRELOAD=/path/to/libboxbridge.so
+steam
+```
 
-Cada subproceso que Steam lance (webhelper, launcher, runtime) va a
-pasar por el wrapper y los binarios x86_64 que encuentre se van a
-ejecutar via box64. Los binarios arm64 nativos van directo, sin tocar.
+### Example: Steam
 
-## Licencia
+```sh
+apt install box64
+cp libboxbridge.so /usr/local/lib/
+LD_PRELOAD=/usr/local/lib/libboxbridge.so BOXBRIDGE_VERBOSE=1 \
+    /root/steam-extract/usr/bin/steam
+```
 
-MIT.
+Every process Steam launches (web helper, launcher, runtime) passes through Boxbridge. x86_64 binaries run under `box64`; native ARM64 ones run directly.
+
+## Settings
+
+| Variable | Effect |
+|---|---|
+| `BOXBRIDGE_OFF=1` | Turn interception off without unloading the library. |
+| `BOXBRIDGE_BOX64=PATH` | Where `box64` lives. Default: `/usr/bin/box64`. |
+| `BOXBRIDGE_VERBOSE=1` | Log every x86 program that gets redirected. |
+| `BOXBRIDGE_TRACE=1` | Also log launches that were left alone. |
+
+## License
+
+MIT
