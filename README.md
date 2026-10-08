@@ -71,4 +71,4 @@ Every process Steam launches (web helper, launcher, runtime) passes through Boxb
 
 ## License
 
-MIT
+**GPL-3.0**. See `LICENSE`.
